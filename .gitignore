@@ -1,0 +1,9 @@
+# Compiled packages and generated contexts can contain machine-local details.
+/*.pp
+/*.mod
+/rimworld_jit.if
+/rimworld_jit.fc
+/tmp/
+
+# Local design and execution notes are not part of the published policy docs.
+/docs/superpowers/

@@ -1,0 +1,25 @@
+# Copyright 2026 Anten Skrabec
+# SPDX-License-Identifier: Apache-2.0
+
+policy_module(rimworld_jit, 1.0.1)
+
+gen_require(`
+    type unconfined_t;
+    role unconfined_r;
+')
+
+type rimworld_jit_t;
+type rimworld_jit_exec_t;
+application_domain(rimworld_jit_t, rimworld_jit_exec_t)
+
+# Preserve existing desktop access; this exception is not a game sandbox.
+unconfined_domain(rimworld_jit_t)
+role unconfined_r types rimworld_jit_t;
+
+# Transition at the game ELF, not at Steam or its runtime setup scripts.
+domtrans_pattern(unconfined_t, rimworld_jit_exec_t, rimworld_jit_t)
+
+# Steam's container sets no_new_privs and bind-mounts the game nosuid.
+allow unconfined_t rimworld_jit_t:process2 { nnp_transition nosuid_transition };
+
+allow rimworld_jit_t self:process execheap;
