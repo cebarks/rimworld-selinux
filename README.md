@@ -2,7 +2,7 @@
 
 A narrowly scoped SELinux executable-heap exception for modded RimWorld 1.7 on Fedora's targeted policy, preserving **default tiered JIT compilation**.
 
-This is a policy workaround, **not an upstream Harmony/runtime fix and not a hardened game sandbox**. Review the [security model](#security-model) before installing. No privileged installer or prebuilt policy package is provided.
+This is a policy workaround, **not an upstream Harmony/runtime fix and not a hardened game sandbox**. Review the [security model](#security-model) before installing. A [managed Python installer](#managed-installer) and a manual procedure are provided; no prebuilt policy package is distributed.
 
 ## Problem / symptoms
 
@@ -52,6 +52,136 @@ Unlike a machine-specific `.fc` file, the public package embeds **no home-direct
 
 A thread-name-filtered `audit2allow` rule for `unconfined_t self:process execheap` would still affect the whole desktop domain. It is not an equivalent game-specific solution.
 
+## Managed installer
+
+`install.py` uses Python's standard library and the Fedora tools listed under
+[prerequisites](#prerequisites-and-build). Install those prerequisites explicitly,
+clone this repository, then run the installer **as your regular desktop user**:
+
+```sh
+python3 install.py install --dry-run
+python3 install.py install
+```
+
+Discovery reads known native Steam roots, their declared libraries, and app
+294100's manifest. It handles current and legacy text library metadata, resolves
+aliases, and validates the native x86-64 apphost. It does not recursively search
+your home directory. If multiple installations are found, select one in a terminal
+or provide an exact path; noninteractive mode never guesses:
+
+```sh
+python3 install.py install --dry-run --game /path/to/RimWorld/RimWorld
+python3 install.py install --game /path/to/RimWorld/RimWorld
+```
+
+Use a real executable path in place of that example. Flatpak Steam, Proton,
+non-native launchers, and other distributions are not supported. Malformed or
+unsupported Steam metadata is an error; `--game` bypasses discovery.
+
+### Dry-run, confirmation, and privileges
+
+- `install --dry-run` prints the selected canonical path and exact regular-file
+  mapping, intended module/domain, recovery location, and security boundaries.
+  **It never builds, authenticates with sudo, or changes directories, state,
+  policy, or labels.** Checks needing privileges are explicitly unverified.
+- A real install compiles only the checked-in policy source in a private temporary
+  directory **without root**. A stale checkout-local package, `.fc`, or Makefile
+  is not used. The package is checked for embedded context mappings.
+- After showing the final plan and package digest, it asks for confirmation.
+  Cancellation/EOF is unsuccessful, not an implicit yes. The bounded root phase
+  uses `sudo`, the system Python in isolated mode, a verified private package
+  snapshot, and fresh safety checks before policy application.
+- `--yes` explicitly accepts the displayed plan for unattended use. It does not
+  bypass path selection, ownership, active-game, privilege, or host-policy checks;
+  sudo may still need authentication. Missing prerequisites are reported with
+  the package-install command, not installed automatically.
+
+```sh
+python3 install.py install --game /path/to/RimWorld/RimWorld --yes
+python3 install.py status
+python3 install.py status --sudo
+```
+
+Default `status` inspects the directory/metadata it can read and explicitly leaves
+live policy state unverified. `status --sudo` authorizes read-only privileged
+verification of the module checksum/priority, exact mapping and its effective
+context resolution, executable identity, and label. Installed/absent verified status returns 0; incomplete, unmanaged, or
+drifted privileged status is not a success. An unprivileged informational status
+returning 0 does **not** mean installation was verified.
+
+### Ownership and removal
+
+The root-owned directory `/var/lib/rimworld-selinux/` is 0700, and its durable
+`state.json` journal is 0600. It records the original full label, applied label,
+exact path/regex and inode identity, module checksum, and progress. Journal schema
+2 separately tracks each module/mapping/label resource as `unattempted`, `pending`,
+`owned`, or `released`. Removal phases never create acquisition rights, and a
+verified release cannot be reversed to adopt an identical external resource.
+Older or unknown journal schemas are rejected, not automatically migrated.
+The installer registers one regular-file context mapping and applies the label through an open
+no-follow descriptor, preserving its original user/role/range. This differs from
+the manual `restorecon` procedure only in how the immediate label is applied.
+
+A first install refuses any existing same-named module, colliding types/mappings,
+or ambiguous ownership. **Manual installations are not adopted or upgraded**,
+even if their policy appears identical. Repeating an installer-owned, unchanged
+installation verifies it rather than adding duplicate rules. Changed or replaced
+executables and other unexpected state are not silently adopted.
+
+Exit the game normally, then remove only an installer-owned installation:
+
+```sh
+python3 install.py remove
+```
+
+Removal authenticates to inspect ownership, displays the exact target, and asks
+for confirmation. `remove --yes` is the explicit unattended alternative. It removes
+only the owned mapping, restores the recorded original label while its type still
+exists, and removes only the matching module. It never terminates a game. A
+missing executable can be reported and its owned policy records cleaned up;
+a different replacement executable is not relabeled automatically.
+
+The journal directory is durably established by syncing its parent, including
+on a retry after interrupted creation. Acquisition intent is saved before each
+mutation; verified ownership and release are saved afterward, independently of
+the displayed phase. Label metadata is synchronized before recording completion
+or release. Failed commands are followed by actual state inspection; only verified
+owned effects are compensated. An interrupted or unsafe
+to-undo operation retains its journal. Inspect and resume owned cleanup with:
+
+```sh
+python3 install.py status --sudo
+python3 install.py remove
+```
+
+Do not delete the journal to bypass a conflict, switch global SELinux settings,
+or blindly remove another actor's module. Locks coordinate this tool's instances,
+not unrelated administrators or Steam updates; identity/drift checks reduce
+races but are not a strong security boundary against concurrent privileged changes.
+Command children inherit the lock descriptor, keeping cleanup out while a surviving
+writer retains its lease after controller interruption. Privileged transactions
+are not force-timed-out: killing only their leader could leave helpers running.
+An active lease is not permission to bypass the lock or terminate unrelated work.
+
+### Testing scope
+
+Run the behavioral suite as a regular user:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+Tests exercise the real parser, files, private journal, locks, and lifecycle
+engine; only privileged command/kernel boundaries are substituted. They cover
+before/after-effect failures and interruptions, drift, cancellation/EOF, a real
+pseudo-terminal confirmation, controller-death/command-lease handoff, active-domain
+detection without an executable link, and strict dry-run behavior. Real read-only Steam
+discovery and offline policy builds are also checked. **The managed install/remove
+path has not been run end-to-end in a privileged disposable SELinux-enabled VM.**
+These tests do not substitute for that integration validation. The live startup
+evidence below concerns the existing manually deployed policy, not an installer
+application to that machine.
+
 ## Tested environment and limits
 
 The policy logic was validated with:
@@ -83,7 +213,11 @@ make -f /usr/share/selinux/devel/Makefile rimworld_jit.pp
 
 The build uses the distribution's existing SELinux Makefile. Generated `.pp`, `.mod`, `.if`, `.fc`, and `tmp/` artifacts are not source files to commit. Building does not install the module or relabel anything.
 
-## Install
+## Manual install
+
+Use this alternative if you are not using the managed installer. Its local mapping
+and module will be considered unmanaged by `install.py`; do not mix ownership
+models without explicitly reviewing and removing the previous installation.
 
 ### 1. Close RimWorld and inspect the existing state
 
@@ -182,7 +316,13 @@ If using a diagnostic launcher, redirect verbose game stdout/stderr to a file. S
 
 ## Updates, moves, and troubleshooting
 
-Steam updates can replace the executable's inode and lose the entrypoint label. For the **same registered path**, after exiting the game:
+Steam updates can replace the executable's inode and lose the entrypoint label.
+The managed installer deliberately reports an inode replacement as drift; it does
+not silently update its ownership journal or adopt the new file. A manual relabel
+alone does not repair that journal. Review the recovery guidance below instead of
+expecting an automatic upgrade.
+
+For a **manual installation at the same registered path**, after exiting the game:
 
 ```sh
 sudo restorecon -v -- "${GAME:?}"
@@ -193,7 +333,12 @@ Do not relabel the whole game tree. If the executable moves, remove the old mapp
 
 If startup fails or new denials appear, inspect the actual domain and denied operation. Do not disable enforcing, enable a desktop-wide heap boolean, remove Steam's NNP/nosuid restrictions, or automatically run `audit2allow`. A missing transition and a game-domain memory denial are different failures.
 
-## Remove / rollback
+## Manual remove / rollback
+
+For an installer-owned, unchanged or interrupted installation, prefer
+`python3 install.py remove` so ownership is verified and the recorded full original
+label is restored. The steps below apply to manual installations or an explicitly
+reviewed manual recovery, not an automatic way to override drift checks.
 
 Exit RimWorld normally first. Use the same `GAME` and `GAME_REGEX` that were registered; regenerate them as above if necessary. If the game was moved or deleted, use the original registered regex for deletion rather than silently switching to a new path.
 
@@ -209,6 +354,24 @@ matchpathcon -V -- "$GAME"
 Stop if mapping deletion or relabeling fails. Never use `semanage fcontext -D`, remove unrelated modules, or remove a domain still used by a running game. If you had a deliberate non-default label before installation, restore and verify it before removing the module instead of assuming the default label is equivalent.
 
 No global boolean, Steam launch option, or runtime configuration was changed by these instructions, so none needs reverting. Removing this workaround may bring back the original alerts until the underlying interaction is fixed.
+
+### Reviewed manual recovery after drift
+
+If the tool refuses because the executable was replaced or another actor changed
+policy, do not force automatic removal. With the game closed, inspect the private
+journal using `sudo /usr/bin/python3 -m json.tool /var/lib/rimworld-selinux/state.json`
+and compare its checksum/priority against `sudo semodule -lfull -m`. Review the
+exact local mapping and current executable label too. If any module/mapping now
+belongs to another installation, leave it alone and resolve ownership first.
+
+Only after establishing that the resources still belong to this installation,
+use the manual removal steps above for the **original registered path/regex**.
+For a replacement inode, choose the appropriate normal label deliberately; do
+not assume an old inode's custom label is correct for it. Verify removal and the
+remaining normal label before archiving the stale journal under a unique name
+inside the same private directory. Do not overwrite an earlier archive or delete
+unrelated metadata. A fresh managed install must not be attempted while an old
+ownership record still exists. There is no automatic adoption/migration command.
 
 ## License
 

@@ -5,5 +5,9 @@
 /rimworld_jit.fc
 /tmp/
 
+# Interpreter and lint caches are generated, not distributable source.
+__pycache__/
+.ruff_cache/
+
 # Local design and execution notes are not part of the published policy docs.
 /docs/superpowers/
